@@ -93,6 +93,16 @@ Windows builds use `VirtualAlloc`, `VirtualLock`, and `SetThreadAffinityMask`. I
 
 See [experiments/transformer_tailslayer/README.md](experiments/transformer_tailslayer/README.md) for Linux and Windows notes.
 
+## CUDA VRAM experiment
+
+`experiments/cuda_vram_tailslayer/` tests whether the same replicated-read idea helps transformer-like random gathers in NVIDIA VRAM. It measures random global-memory load tails with CUDA `clock64()` for a single table versus two replicated tables.
+
+```powershell
+python .\experiments\cuda_vram_tailslayer\vram_tail_bench.py --table-mb 128 --samples 200000 --repeats 5
+```
+
+This is an idealized VRAM latency test, not a full CUDA transformer. A lower `effective_min` tail only helps end-to-end inference or training if the CUDA kernel design can consume the first completed replica without paying more synchronization cost than it saves.
+
 ## Benchmarks and spike timing
 
 The `discovery/` directory contains supporting code used to characterize DRAM refresh behavior:
