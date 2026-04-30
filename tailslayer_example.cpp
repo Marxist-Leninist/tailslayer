@@ -1,4 +1,6 @@
 #include <tailslayer/hedged_reader.hpp>
+#include <atomic>
+#include <cstdint>
 #include <iostream>
 
 /*
@@ -6,18 +8,18 @@ Example user functions that could be passed to tailslayer
 */
 
 // Example with arguments
-[[gnu::always_inline]] inline std::size_t dummy_read_signal2(int arg1, int arg2) {
+TAILSLAYER_ALWAYS_INLINE std::size_t dummy_read_signal2(int arg1, int arg2) {
     std::cout << "Hi with args: " << arg1 << " " << arg2 << "\n";
     return 0; // Index to read
 }
 
 template <typename T>
-[[gnu::always_inline]] inline void dummy_final_work2(T val, int arg2) {
+TAILSLAYER_ALWAYS_INLINE void dummy_final_work2(T val, int arg2) {
     std::cout << "Hi with args: " << val << " " << arg2 << "\n";
 }
 
 // Example with no arguments
-[[gnu::always_inline]] inline std::size_t dummy_read_signal() {
+TAILSLAYER_ALWAYS_INLINE std::size_t dummy_read_signal() {
     // UPDATE HERE - signal
     // This is the signal that the worker will wait for
     // Once this loop completes, the read will be triggered
@@ -37,10 +39,12 @@ template <typename T>
 }
 
 template <typename T>
-[[gnu::always_inline]] inline void dummy_final_work(T val) {
+TAILSLAYER_ALWAYS_INLINE void dummy_final_work(T val) {
     // UPDATE HERE - final work
     // This is the function that will be executed with the value as soon as the signal function finishes
-    asm volatile("" :: "r"(val)); // Dummy using value
+    static volatile std::uint64_t sink = 0;
+    sink ^= static_cast<std::uint64_t>(val); // Dummy using value
+    std::atomic_signal_fence(std::memory_order_seq_cst);
     std::cout << "Val: " << val << "\n";
 }
 

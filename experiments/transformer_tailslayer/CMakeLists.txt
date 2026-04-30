@@ -1,0 +1,2 @@
+add_executable(transformer_tailslayer_bench transformer_tailslayer_bench.cpp)
+target_link_libraries(transformer_tailslayer_bench PRIVATE tailslayer Threads::Threads)

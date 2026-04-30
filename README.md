@@ -27,13 +27,13 @@ You provide the value type and two functions as template parameters:
 ```cpp
 #include <tailslayer/hedged_reader.hpp>
 
-[[gnu::always_inline]] inline std::size_t my_signal() {
+TAILSLAYER_ALWAYS_INLINE std::size_t my_signal() {
     // Wait for your event, then return the index to read
     return index_to_read;
 }
 
 template <typename T>
-[[gnu::always_inline]] inline void my_work(T val) {
+TAILSLAYER_ALWAYS_INLINE void my_work(T val) {
     // Use the value
 }
 
@@ -65,6 +65,26 @@ You can also optionally pass in a different channel offset, channel bit, and num
 make
 ./tailslayer_example
 ```
+
+On Windows, build with CMake from a Visual Studio C++ environment:
+
+```powershell
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+cmake --build build --config Release
+.\build\Release\tailslayer_example.exe
+```
+
+Windows builds use `VirtualAlloc`, `VirtualLock`, and `SetThreadAffinityMask`. If large pages are unavailable, Tailslayer falls back to normal committed pages so examples and experiments can run, but that fallback does not prove physical DRAM-channel placement.
+
+## Transformer experiment
+
+`experiments/transformer_tailslayer/` contains a CPU transformer-shaped benchmark that compares single-worker inference/training with a Tailslayer-style replicated embedding table and duplicate workers.
+
+```powershell
+.\build\experiments\transformer_tailslayer\Release\transformer_tailslayer_bench.exe --mode all --iters 1000 --vocab 1048576 --seq-len 16 --d-model 32 --replicas 2 --first-core 0
+```
+
+See [experiments/transformer_tailslayer/README.md](experiments/transformer_tailslayer/README.md) for Linux and Windows notes.
 
 ## Benchmarks and spike timing
 

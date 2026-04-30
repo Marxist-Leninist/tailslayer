@@ -1,6 +1,8 @@
 #ifndef TAILSLAYER_HEDGED_READER_HPP
 #define TAILSLAYER_HEDGED_READER_HPP
 
+#include <tailslayer/platform.hpp>
+
 #include <iostream>
 #include <array>
 #include <thread>
@@ -8,9 +10,7 @@
 #include <cstdint>
 #include <cassert>
 #include <cstring>
-#include <sys/mman.h>
-#include <sched.h>
-#include <unistd.h>
+#include <stdexcept>
 
 namespace tailslayer {
 
@@ -28,39 +28,14 @@ namespace detail {
 
 // These functions are really only used as timing examples for dev purposes
 // Lets you get a quick idea if you accidentally added a large amount of cycles
-#if defined(__x86_64__) || defined(__i386__)
-    static inline void clflush_addr(void *addr) {
-        asm volatile("clflush (%0)" :: "r"(addr) : "memory");
-    }
-
-    static inline void mfence_inst() {
-        asm volatile("mfence" ::: "memory");
-    }
-
-    static inline std::uint64_t rdtsc_lfence() {
-        std::uint64_t lo, hi;
-        asm volatile("lfence\n\t"
-                    "rdtsc"
-                    : "=a"(lo), "=d"(hi));
-        return (hi << 32) | lo;
-    }
-
-    static inline std::uint64_t rdtscp_lfence() {
-        std::uint64_t lo, hi;
-        std::uint32_t aux;
-        asm volatile("rdtscp"
-                    : "=a"(lo), "=d"(hi), "=c"(aux));
-        asm volatile("lfence" ::: "memory");
-        return (hi << 32) | lo;
-    }
-#endif // x86
+    using platform::clflush_addr;
+    using platform::mfence_inst;
+    using platform::rdtsc_lfence;
+    using platform::rdtscp_lfence;
 } // namespace detail
 
 static inline int pin_to_core(int core_id) {
-    cpu_set_t cpuset;
-    CPU_ZERO(&cpuset);
-    CPU_SET(core_id, &cpuset);
-    return sched_setaffinity(0, sizeof(cpuset), &cpuset);
+    return platform::pin_to_core(core_id);
 }
 
 // This lets the caller pass arguments to their worker functions
@@ -92,14 +67,17 @@ public:
 
         // Precompute all these so they're not getting computed in the hot path
         std::size_t elements_per_chunk = channel_offset_ / sizeof(T);
+        assert((elements_per_chunk & (elements_per_chunk - 1)) == 0 && "Channel offset / sizeof(T) must be a power of two");
         chunk_mask_ = elements_per_chunk - 1;
-        chunk_shift_ = __builtin_ctzll(elements_per_chunk); // counts trailing zeros to get the shift amount
+        chunk_shift_ = platform::count_trailing_zeroes(elements_per_chunk); // counts trailing zeros to get the shift amount
         stride_in_elements_ = (num_channels_ * channel_offset_) / sizeof(T);
         std::size_t stride_bytes = num_channels_ * channel_offset_;
         std::size_t max_strides = SUPERPAGE_SIZE / stride_bytes;
         capacity_ = max_strides * elements_per_chunk;
 
-        setup_memory();
+        if (!setup_memory()) {
+            throw std::runtime_error("tailslayer: failed to allocate replica memory");
+        }
         setup_replica_cores();
     }
 
@@ -123,8 +101,7 @@ public:
         for (std::size_t i = 0; i < N; ++i) {
             workers_[i] = std::thread(&HedgedReader::worker_func, this, i);
         }
-        usleep(10000); // 10ms delay to make sure the workers are started
-                        // If you don't do this, it freezes because the workers can't get to their cores
+        platform::sleep_ms(10); // Make sure the workers have reached their pinned cores.
     }
 
     ~HedgedReader() {
@@ -133,7 +110,7 @@ public:
         }
 
         if (replica_page_) {
-            munmap(replica_page_, SUPERPAGE_SIZE);
+            platform::free_superpage(replica_page_, SUPERPAGE_SIZE);
             replica_page_ = nullptr;
         }
     }
@@ -175,8 +152,8 @@ private:
         // std::cout << "\nRunning time: " << t1 - t0 << " cycles\n";
     }
 
-    [[gnu::always_inline]] inline T* get_next_logical_index_address(std::size_t replica_idx,
-                                                                             std::size_t logical_index) const {
+    TAILSLAYER_ALWAYS_INLINE T* get_next_logical_index_address(std::size_t replica_idx,
+                                                               std::size_t logical_index) const {
         std::size_t chunk_idx = logical_index >> chunk_shift_; 
         std::size_t offset_in_chunk = logical_index & chunk_mask_;
         std::size_t element_offset = (chunk_idx * stride_in_elements_) + offset_in_chunk;
@@ -195,17 +172,16 @@ private:
     }
 
     bool setup_memory() {
-        replica_page_ = mmap(nullptr, SUPERPAGE_SIZE, PROT_READ | PROT_WRITE,
-                                MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB | (30 << MAP_HUGE_SHIFT), -1, 0);
+        replica_page_ = platform::allocate_superpage(SUPERPAGE_SIZE);
 
-        if (replica_page_ == MAP_FAILED) {
-            perror("mmap 1GB hugepage (replicas)");
+        if (replica_page_ == nullptr) {
+            perror("tailslayer allocate_superpage (replicas)");
             replica_page_ = nullptr;
             return false;
         }
         
         std::memset(replica_page_, 0x42, SUPERPAGE_SIZE);
-        mlock(replica_page_, SUPERPAGE_SIZE);
+        platform::lock_memory(replica_page_, SUPERPAGE_SIZE);
 
         char* base = static_cast<char*>(replica_page_);
         for (std::size_t i = 0; i < N; ++i) {
