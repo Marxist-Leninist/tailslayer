@@ -74,6 +74,13 @@ cmake --build build --config Release
 .\build\Release\tailslayer_example.exe
 ```
 
+Or use the portable LLVM-MinGW build script:
+
+```powershell
+.\scripts\build_windows_llvm_mingw.ps1 -ToolchainBin C:\Users\User\cppdev\llvm-mingw-20260421-ucrt-x86_64\bin
+.\build-windows\transformer_tailslayer_bench.exe --mode all --iters 1000 --vocab 1048576 --seq-len 16 --d-model 32 --replicas 2 --first-core 0
+```
+
 Windows builds use `VirtualAlloc`, `VirtualLock`, and `SetThreadAffinityMask`. If large pages are unavailable, Tailslayer falls back to normal committed pages so examples and experiments can run, but that fallback does not prove physical DRAM-channel placement.
 
 ## Transformer experiment

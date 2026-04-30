@@ -69,6 +69,18 @@ inline void sleep_ms(unsigned milliseconds) {
 #endif
 }
 
+TAILSLAYER_ALWAYS_INLINE void spin_pause() {
+#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
+    _mm_pause();
+#elif (defined(__GNUC__) || defined(__clang__)) && (defined(__x86_64__) || defined(__i386__))
+    asm volatile("pause" ::: "memory");
+#elif defined(_WIN32)
+    YieldProcessor();
+#else
+    std::this_thread::yield();
+#endif
+}
+
 inline int pin_to_core(int core_id) {
 #if defined(_WIN32)
     if (core_id < 0) return -1;

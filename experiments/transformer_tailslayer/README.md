@@ -21,6 +21,8 @@ cmake --build build --config Release --target transformer_tailslayer_bench
 
 If Windows cannot allocate large pages, the platform layer falls back to normal committed pages. That fallback is useful for testing correctness and duplicate-worker overhead, but it does not prove physical DRAM-channel placement.
 
+`--first-core` names the first worker core. The hedged coordinator uses `first-core + replicas`, so leave that core free when choosing a core range.
+
 ## Linux Build
 
 ```bash

@@ -349,9 +349,13 @@ class HedgedRunner {
 public:
     HedgedRunner(const Config& cfg, const TinyTransformer& model, const std::vector<Example>& data)
         : cfg_(cfg), model_(model), data_(data), outputs_(cfg.replicas) {
+        tailslayer::platform::pin_to_core(cfg_.first_core + cfg_.replicas);
         for (auto& out : outputs_) out = model_.make_output();
         for (int r = 0; r < cfg_.replicas; ++r) {
             workers_.emplace_back(&HedgedRunner::worker_loop, this, r);
+        }
+        while (ready_count_.load(std::memory_order_acquire) < cfg_.replicas) {
+            tailslayer::platform::spin_pause();
         }
     }
 
@@ -371,12 +375,12 @@ public:
         epoch_.fetch_add(1, std::memory_order_release);
 
         while ((winner = winner_.load(std::memory_order_acquire)) < 0) {
-            std::this_thread::yield();
+            tailslayer::platform::spin_pause();
         }
         double first_us = first_latency_us_.load(std::memory_order_acquire);
 
         while (done_count_.load(std::memory_order_acquire) < cfg_.replicas) {
-            std::this_thread::yield();
+            tailslayer::platform::spin_pause();
         }
         return first_us;
     }
@@ -390,11 +394,12 @@ private:
         tailslayer::platform::pin_to_core(cfg_.first_core + replica);
         Scratch scratch = model_.make_scratch();
         std::uint64_t seen_epoch = epoch_.load(std::memory_order_acquire);
+        ready_count_.fetch_add(1, std::memory_order_release);
 
         while (true) {
             std::uint64_t current_epoch = epoch_.load(std::memory_order_acquire);
             if (current_epoch == seen_epoch) {
-                std::this_thread::yield();
+                tailslayer::platform::spin_pause();
                 continue;
             }
             seen_epoch = current_epoch;
@@ -419,6 +424,7 @@ private:
     std::vector<std::thread> workers_;
     std::vector<ForwardOutput> outputs_;
     std::atomic<std::uint64_t> epoch_{0};
+    std::atomic<int> ready_count_{0};
     std::atomic<bool> stop_{false};
     std::atomic<int> task_index_{0};
     std::atomic<int> done_count_{0};
