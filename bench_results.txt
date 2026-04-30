@@ -1,0 +1,36 @@
+tailslayer transformer benchmark
+================================
+TSC: 2.808 GHz
+Config: vocab=8000  d_model=256  d_ff=1024
+Cores: A=0  B=1   channel_offset=256
+Samples: embed=500000  fwd=500  train=300
+
+══════ TEST 1: Embedding lookup (single-cacheline read) ══════
+  Embedding table: 8000 x 256 = 8.2 MB per replica  (allocating...)
+[tailslayer] WARNING: large pages unavailable, using regular pages. Channel isolation not guaranteed.
+  Channel 0 (standard)        p50=     70  p99=    397  p99.9=    473  p99.99= 471855  max=8215343 ns
+  Channel 1 (standard)        p50=     71  p99=    395  p99.9=    470  p99.99=  56360  max=4246800 ns
+  Hedged (min of pair)        p50=     66  p99=    249  p99.9=    400  p99.99=    455  max=    714 ns
+  Paired 166053 / 500000 samples (33.2%)
+  >>> p99.99 speedup: 1037.6x
+
+══════ TEST 2: Weight-matrix sequential scan (4 KB blocks) ══════
+  Matrix: 256 x 256 = 0.3 MB per replica
+[tailslayer] WARNING: large pages unavailable, using regular pages. Channel isolation not guaranteed.
+  Channel 0 (standard)        p50=    368  p99=    694  p99.9=    771  p99.99=  21380  max= 202131 ns
+  Hedged (min of pair)        p50=    365  p99=    395  p99.9=    642  p99.99=    704  max=    748 ns
+
+══════ TEST 3: Transformer forward pass (inference) ══════
+  Model: V=8000 D=256 F=1024  (19.5 MB weights, 500 samples)
+  Single core (standard)      p50=3731544  p99=80265666  p99.9=187315298  p99.99=187315298  max=187315298 ns
+  Hedged (min of pair)        p50=3588622  p99=18254557  p99.9=23067037  p99.99=23067037  max=23067037 ns
+  Paired 266 / 500 iterations
+  >>> p99.99 speedup: 8.12x
+
+══════ TEST 4: Training iteration (fwd + bwd + SGD) ══════
+  Single core (standard)      p50=5030357  p99=140874588  p99.9=184426327  p99.99=184426327  max=184426327 ns
+
+Done. For meaningful tail-latency results, run on bare-metal
+Linux with huge pages and real-time priority:
+  echo 2 | sudo tee /proc/sys/vm/nr_hugepages
+  sudo chrt -f 99 ./transformer_bench

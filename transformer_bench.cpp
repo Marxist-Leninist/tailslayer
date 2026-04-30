@@ -55,18 +55,20 @@ using namespace tailslayer::platform::timing;
 // ───────────── configuration ─────────────
 
 struct BenchConfig {
-    int vocab_size      = 32000;
-    int d_model         = 512;
-    int d_ff            = 2048;
+    int vocab_size      = 8000;     // smaller default for laptop CPUs
+    int d_model         = 256;
+    int d_ff            = 1024;
     int channel_offset  = 256;
     int num_channels    = 2;
     int core_a          = 0;
     int core_b          = 1;
-    int n_embed_samples = 2000000;
-    int n_fwd_samples   = 20000;
-    int n_train_samples = 10000;
-    int warmup          = 2000;
-    int max_pair_gap    = 400;   // cycles
+    int n_embed_samples = 500000;   // micro-bench is fast (single-byte read)
+    int n_fwd_samples   = 200;      // forward pass is heavy (lots of matmul)
+    int n_train_samples = 100;      // training step is even heavier
+    int warmup          = 200;
+    int max_pair_gap    = 400;      // cycles for embed micro-bench
+    bool skip_train     = false;
+    bool skip_forward   = false;
 };
 
 static BenchConfig parse_args(int argc, char** argv) {
@@ -78,8 +80,13 @@ static BenchConfig parse_args(int argc, char** argv) {
         else if (arg("--core-b"))          c.core_b          = nxt();
         else if (arg("--channel-offset"))  c.channel_offset  = nxt();
         else if (arg("--samples"))         c.n_embed_samples = nxt();
+        else if (arg("--fwd-samples"))     c.n_fwd_samples   = nxt();
+        else if (arg("--train-samples"))   c.n_train_samples = nxt();
         else if (arg("--vocab"))           c.vocab_size      = nxt();
         else if (arg("--d-model"))         c.d_model         = nxt();
+        else if (arg("--d-ff"))            c.d_ff            = nxt();
+        else if (arg("--skip-train"))      c.skip_train      = true;
+        else if (arg("--skip-forward"))    c.skip_forward    = true;
     }
     return c;
 }
@@ -395,10 +402,12 @@ static void embed_thread(const ReplicatedBuf& buf, int replica, int core,
 
 static void bench_embedding(const BenchConfig& cfg, double tsc_ghz) {
     printf("\n══════ TEST 1: Embedding lookup (single-cacheline read) ══════\n");
+    fflush(stdout);
 
     size_t embed_bytes = (size_t)cfg.vocab_size * cfg.d_model * sizeof(float);
-    printf("  Embedding table: %d x %d = %.1f MB per replica\n",
+    printf("  Embedding table: %d x %d = %.1f MB per replica  (allocating...)\n",
            cfg.vocab_size, cfg.d_model, embed_bytes / 1e6);
+    fflush(stdout);
 
     // generate random embeddings
     std::mt19937 rng(42);
@@ -506,6 +515,7 @@ static void scan_thread(const ReplicatedBuf& buf, int replica, int core,
 
 static void bench_weight_scan(const BenchConfig& cfg, double tsc_ghz) {
     printf("\n══════ TEST 2: Weight-matrix sequential scan (4 KB blocks) ══════\n");
+    fflush(stdout);
 
     size_t w_bytes = (size_t)cfg.d_model * cfg.d_model * sizeof(float); // one D×D matrix
     printf("  Matrix: %d x %d = %.1f MB per replica\n",
@@ -579,12 +589,14 @@ static void fwd_thread(const TransformerWeights& tw,
 
 static void bench_forward(const BenchConfig& cfg, double tsc_ghz) {
     printf("\n══════ TEST 3: Transformer forward pass (inference) ══════\n");
+    fflush(stdout);
 
     std::mt19937 rng(7);
     TransformerWeights tw;
     tw.init(cfg.vocab_size, cfg.d_model, cfg.d_ff, rng);
-    printf("  Model: V=%d D=%d F=%d  (%.1f MB weights)\n",
-           tw.V, tw.D, tw.F, tw.total_bytes() / 1e6);
+    printf("  Model: V=%d D=%d F=%d  (%.1f MB weights, %d samples)\n",
+           tw.V, tw.D, tw.F, tw.total_bytes() / 1e6, cfg.n_fwd_samples);
+    fflush(stdout);
 
     std::uniform_int_distribution<int> td(0, cfg.vocab_size - 1);
     std::vector<int> tokens(1024);
@@ -656,6 +668,7 @@ static void train_thread(TransformerWeights tw,  // copy -- each thread owns one
 
 static void bench_training(const BenchConfig& cfg, double tsc_ghz) {
     printf("\n══════ TEST 4: Training iteration (fwd + bwd + SGD) ══════\n");
+    fflush(stdout);
 
     std::mt19937 rng(99);
     TransformerWeights tw;
@@ -697,6 +710,7 @@ static void bench_training(const BenchConfig& cfg, double tsc_ghz) {
 // ═══════════════════════════════════════════════════════════
 
 int main(int argc, char** argv) {
+    setvbuf(stdout, NULL, _IONBF, 0);   // unbuffered stdout (visible mid-run)
     printf("tailslayer transformer benchmark\n");
     printf("================================\n");
 
@@ -707,14 +721,16 @@ int main(int argc, char** argv) {
            cfg.vocab_size, cfg.d_model, cfg.d_ff);
     printf("Cores: A=%d  B=%d   channel_offset=%d\n",
            cfg.core_a, cfg.core_b, cfg.channel_offset);
+    printf("Samples: embed=%d  fwd=%d  train=%d\n",
+           cfg.n_embed_samples, cfg.n_fwd_samples, cfg.n_train_samples);
 
     bench_embedding(cfg, tsc_ghz);
     bench_weight_scan(cfg, tsc_ghz);
-    bench_forward(cfg, tsc_ghz);
-    bench_training(cfg, tsc_ghz);
+    if (!cfg.skip_forward) bench_forward(cfg, tsc_ghz);
+    if (!cfg.skip_train)   bench_training(cfg, tsc_ghz);
 
-    printf("\nDone. For meaningful results, run on bare-metal Linux with\n"
-           "huge pages and real-time priority:\n"
+    printf("\nDone. For meaningful tail-latency results, run on bare-metal\n"
+           "Linux with huge pages and real-time priority:\n"
            "  echo 2 | sudo tee /proc/sys/vm/nr_hugepages\n"
            "  sudo chrt -f 99 ./transformer_bench\n");
     return 0;
